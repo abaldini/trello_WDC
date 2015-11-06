@@ -1,0 +1,180 @@
+<html>
+<meta http-equiv="Cache-Control" content="no-store" />
+<head>
+  <title>Alpo-Dev Project Status</title>
+  <script src="http://ajax.googleapis.com/ajax/libs/jquery/1.11.1/jquery.min.js" type="text/javascript"></script>
+  <script src="https://online.tableau.com/javascripts/api/tableauwdc-1.1.0.js" type="text/javascript"></script>
+
+  <script type="text/javascript">
+
+  (function() {
+
+    // Helper function to unpack the Trello data. Trello sends a list of attributes like members, lists, labels, etc
+    // as an object with name and ID. We store unpack those and create a javascript object for later user.
+    function buildObj(jsondata, attr) {
+      var listObj = { };
+
+      for (var ii =0; ii < jsondata.length; ++ii) {
+
+        listObj[jsondata[ii].id] = jsondata[ii][attr];
+      }
+      return listObj;
+    }
+
+    // Helper function to dereference the user ID to an actual name. We use the members ojbect we created earlier by
+    // passing the members list to the buildObj function
+    function get_members_name(idMembers, members) {
+      var memlist=[];
+
+      for(var ii = 0; ii < idMembers.length; ++ii) {
+        memlist.push(members[idMembers[ii]]);
+      }
+      return memlist.length == 0 ? "No Members Assigned" : memlist;
+
+    }
+
+    // Helper function very similar to get_members_name above, only for labels this time.
+    function get_labels(labels) {
+      var labelary = [];
+      for (var ii = 0; ii < labels.length; ++ii){
+        labelary.push(labels[ii].name);
+      }
+      return labelary.length == 0 ? "No Labels Applied" : labelary;
+    }
+    var myConnector = tableau.makeConnector();
+
+    // We are pulling in a very small set of fields from trello. There is a lot more data we could mine in this api.
+    // https://developers.trello.com/apis
+    myConnector.getColumnHeaders = function() {
+      var fieldNames = ['Id', 'List', 'Name', 'Members', 'Labels'];
+      var fieldTypes = ['string', 'string', 'string', 'string', 'string'];
+      tableau.incrementalExtractColumn = "Id";
+      tableau.headersCallback(fieldNames, fieldTypes);
+    };
+
+    myConnector.getTableData = function() {
+
+      var dataToReturn = [];
+
+      console.log("Connection URI:" + tableau.connectionData);
+
+      var xhr = $.ajax({
+        url: tableau.connectionData,
+        dataType: 'json',
+        success: function (data) {
+          if (data.lists  && data.cards && data.members){
+            // This is where we call the helper function above to unpack the lists of attributes that the trello API
+            // sends back in the form of ID => Attribute. We create a javascript object to use later.
+            lists = buildObj(data.lists,'name');
+            members = buildObj(data.members,'fullName');
+
+            cards = data.cards;
+
+            unusedLists = [];
+
+            // Create an array of listnames used so we can find any active list names that have no members or labels
+            for (var listname in lists) {
+                  unusedLists.push(lists[listname]);
+            }
+
+            // Iterate over all the card data we get back from the Trello API. Create a javascript object called entry
+            // that contains all the members, labels, lists, etc. Push the entry object to an array.
+            for (ii = 0; ii < cards.length; ++ii) {
+              var cardList = lists[cards[ii].idList];
+              var memberlist = get_members_name(cards[ii].idMembers, members);
+              var cardName = cards[ii].name;
+
+              var index = unusedLists.indexOf(cardList);
+              if (index > -1 ) {
+                  unusedLists.splice(index, 1);
+              }
+
+              var labels = get_labels(cards[ii].labels);
+              var entry = {
+                'Id': cards[ii].id,
+                'Name': cardName,
+                'List': cardList,
+                'Members': memberlist.toString(),
+                'Labels': labels.toString()
+              };
+
+              dataToReturn.push(entry);
+
+            }
+
+            // Iterate over all the unused lists and create dummy data.
+            for (var ii = 0; ii < unusedLists.length; ++ii) {
+                var entry = {
+                    'Id': 'No ID',
+                    'Name': 'No Name',
+                    'List': unusedLists[ii],
+                    'Members': 'No Members',
+                    'Labels': 'No Labels'
+                };
+              dataToReturn.push(entry);
+            }
+
+
+            tableau.dataCallback(dataToReturn, dataToReturn.length.toString(), false);
+
+          }
+          else {
+            tableau.abortWithError("No results found for " + tableau.connectionData);
+          }
+        },
+        error: function (xhr, ajaxOptions, thrownError) {
+          tableau.log("Connection error: " + xhr.responseText + "\n" + thrownError);
+          tableau.abortWithError("Error while trying to connect to the Trello data source.");
+        }
+      });
+
+    };
+
+    tableau.registerConnector(myConnector);
+
+
+})();
+
+  $(document).ready(function() {
+
+    $("#submitButton").click(function() {
+      var apikey = $('#apikey').val().trim();
+      var sitetoken = $('#sitetoken').val().trim();
+      var boardid = $('#boardid').val().trim();
+
+      function buildUri(apikey, token, board) {
+        return 'https://api.trello.com/1/boards/' + board +
+                '/?key=' + apikey + "&" +
+                'token=' + token + "&" +
+                'lists=open&' +
+                'list_fields=name&' +
+                'cards=open&' +
+                'members=all&' +
+                'card_fields=name,desc,labels,idMembers,idList,id';
+
+      };
+
+      if (boardid) {
+        tableau.connectionData = buildUri(apikey, sitetoken, boardid);
+        tableau.connectionName = "Trello Board: " + boardid;
+
+        tableau.submit();
+      }
+    });
+  });
+
+</script>
+</head>
+<body>
+<p>Enter your API KEY: <input type="Text" size="100" id="apikey" />
+    <a href="https://trello.com/c/jObnWvl1/25-generating-your-developer-key">How do I get an API KEY?</a>
+</p>
+<p>Enter your site Token: <input type="Text" size="100" id="sitetoken" />
+    <a href="https://trello.com/c/fD8ErOzA/26-getting-a-user-token-and-oauth-urls">How do I get a token?</a>
+</p>
+<p>Enter your board ID: <input type="Text" size="100" id="boardid"  />
+    <a href="https://trello.com/docs/gettingstarted/">How do I get my board ID?</a>
+</p>
+<p><button type="button" id="submitButton">Get the Data</button></p>
+</body>
+</html>
